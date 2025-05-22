@@ -9,14 +9,15 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from agents import Agent, Runner, trace, function_tool
 import pprint
+import openai
+from openai import AsyncOpenAI
 
 # Logging configuration
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('chatbot_debug.log'),
-        logging.StreamHandler()
+        logging.FileHandler('chatbot_debug.log')
     ]
 )
 logger = logging.getLogger('chatbot')
@@ -135,7 +136,16 @@ You are a friendly and professional Relationship Manager assisting athletes, coa
 
 @function_tool
 def get_sql_respo(sql_query: str):
-    """Executes SQL query and returns results from athlete schedules."""
+    """
+    Executes the provided SQL query on the athlete schedules database and returns the results.
+
+    Args:
+        sql_query (str): The SQL query to be executed.
+
+    Returns:
+        list: Query results as a list of dictionaries (for SELECT queries), or an empty list for non-SELECT queries or on error.
+    """
+    print(f"[SQL Query] {sql_query}")
     try:
         conn = psycopg2.connect(
             host="localhost",
@@ -144,15 +154,18 @@ def get_sql_respo(sql_query: str):
             password="Privacy@100",
             port=5432
         )
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
-        cursor.execute(sql_query)
-        results = cursor.fetchall()
-        conn.commit()  # Commit the transaction to ensure changes are saved
-        cursor.close()
-        conn.close()
+        with conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(sql_query)
+                if cursor.description is not None:
+                    results = cursor.fetchall()
+                else:
+                    conn.commit()
+                    results = []
         return results
     except Exception as e:
-        print("Error executing SQL:", e)
+        # Log the error in a professional manner
+        print(f"[SQL Execution Error] {e}")
         return []
 
 moderator_agent = Agent(
@@ -173,17 +186,19 @@ moderator_agent = Agent(
 # --- Agent Caller ---
 
 async def call_agent(agent, user_query):
+    """
+    Calls the given agent asynchronously with the provided user_query.
+    Handles both string and dict input, and wraps input in a dict if the agent expects a Pydantic model.
+    Returns the agent's final_output.
+    """
     with trace(f"{agent.name}"):
-        # Always pass a string as user_query unless the agent expects a dict
-        # Fix: Always wrap input in a dict if agent expects a pydantic model
-        # This avoids passing a dict directly to Runner.run, which can cause attribute errors
-        if hasattr(agent, "output_type") and hasattr(agent.output_type, "__fields__"):
-            # If the agent expects a pydantic model, pass a dict with the correct keys
+        # Use model_fields for Pydantic v2+
+        if hasattr(agent, "output_type") and hasattr(agent.output_type, "model_fields"):
+            # Only wrap if user_query is a dict and agent expects a dict
             if isinstance(user_query, dict):
                 result = await Runner.run(agent, user_query)
             else:
-                # Try to wrap string input into the expected field if possible
-                # For most agents, the input is just a string, so pass as is
+                # Pass the string directly for LLM agents
                 result = await Runner.run(agent, user_query)
         else:
             result = await Runner.run(agent, user_query)
@@ -252,8 +267,8 @@ async def handle_conversation(user_input, history=None):
     context["last_response"] = final_response
 
     # Debug: print what you are returning
-    logger.debug("Returning history to Gradio:")
-    pprint.pprint(history)
+    # logger.debug("Returning history to Gradio:")
+    # pprint.pprint(history)
 
     return ensure_chat_format(history), history
 
@@ -262,7 +277,7 @@ async def handle_conversation(user_input, history=None):
 demo = gr.Interface(
     fn=handle_conversation,
     inputs=[
-        gr.Textbox(label="Message", placeholder="Type your message here..."),
+        gr.Textbox(label="Message", placeholder="Type your message here...", lines=2),
         gr.State()  # exactly one state input
     ],
     outputs=[
@@ -270,7 +285,9 @@ demo = gr.Interface(
         gr.State()  # exactly one state output
     ],
     title="Athlete Assistant",
-    description="Your personal assistant for managing athlete schedules and information"
+    description="Your personal assistant for managing athlete schedules and information",
+    live=False,  # Disable streaming so the submit button appears
+    allow_flagging="never"  # For older Gradio versions; for newer, use flagging_mode
 )
 
 if __name__ == "__main__":

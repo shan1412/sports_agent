@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.log
+# Environment variables
+.env
+
+# Gradio
+gradio_cache/
+
+# Database
+*.db
+
+#uv
+uv.lock
+
+#pydantic
+.pydantic.json  
+
+#openai
+openai_debug.log
+
+#dotenv
+.env.local
+
+#psycopg2
+psycopg2.log
+
+
+
